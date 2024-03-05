@@ -1,11 +1,11 @@
 import { SpaceshipEvents } from "../events";
 import { raiseCustomEvent } from "../util";
 
-const THREE: any = (window as any).THREE;
 
 /* globals AFRAME THREE */
 export default function () {
-    const AFRAME: any = (window as any).AFRAME || {}
+    const AFRAME: any = (window as any).AFRAME || {};
+    const THREE: any = (window as any).THREE;
     AFRAME.registerComponent('ship-part', {
         schema: {
             name: { type: 'string' },
@@ -38,6 +38,18 @@ export default function () {
                     let model = this.loader.cloneModel(this.data.name);
                     if (model) {
                         let entity: any = document.createElement('a-entity');
+                        let imageElement = document.querySelector(`#red`);
+                        if (imageElement) {
+                            const texture = new THREE.Texture(imageElement);
+                            texture.needsUpdate = true; // Important: Update the texture with the image data
+
+                            model.traverse((child: any) => {
+                                if (child.isMesh) {
+                                    child.material.map = texture; // Apply the texture to each mesh
+                                    child.material.needsUpdate = true; // Ensure the material is updated
+                                }
+                            });
+                        }
                         entity.object3D.add(model);
                         this.el.appendChild(entity);
                         this.entity = entity;

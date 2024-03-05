@@ -328,7 +328,7 @@ export default function SpaceShipScene() {
             </a-entity>
             <a-entity id="ground"
                 geometry="primitive: box; width: 12; height: 0.01; depth: 12"
-                material="shader: flat; src: #floor; repeat: 4 4">
+                material="shader: flat; src: #floor; repeat: 10 10">
             </a-entity>
             <a-entity position="1 1.5 2" scale=".1 .1 .1">
                 <a-ship-part name={'hull.bullHead'} model-name="shipyard"></a-ship-part>

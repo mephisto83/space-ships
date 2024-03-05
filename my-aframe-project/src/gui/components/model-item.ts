@@ -1,8 +1,8 @@
 import { getShipScaleFor } from "../../shipparts";
 
 export default function () {
-    const AFRAME: any = (window as any).AFRAME || {}
-
+    const AFRAME: any = (window as any).AFRAME || {};
+    const THREE: any = (window as any).THREE;
     AFRAME.registerComponent('space-item', {
         schema: {
             options: { type: 'string' }
@@ -12,6 +12,7 @@ export default function () {
         },
         init: function () {
             let me = this;
+
             let { guiItem, part, modelName, } = JSON.parse(this.data.options);  // Component data
             me.guiItem = guiItem;
             let entity: any = document.createElement('a-entity');
