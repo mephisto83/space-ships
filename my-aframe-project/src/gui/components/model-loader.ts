@@ -1,10 +1,10 @@
 import { SpaceshipEvents } from "../events";
 import { raiseCustomEvent } from "../util";
 
-const THREE: any = (window as any).THREE;
 
 /* globals AFRAME THREE */
 export default function () {
+    const THREE: any = (window as any).THREE;
     const AFRAME: any = (window as any).AFRAME || {}
     AFRAME.registerComponent('model-loader', {
         schema: {
@@ -24,31 +24,37 @@ export default function () {
                 if (child.isMesh) {
                     child.visible = false;
                 }
+                if( child.material ) {
+                    child.material.side = THREE.DoubleSide;
+                }
             });
             this.modelSource = model;
             raiseCustomEvent(SpaceshipEvents.MODELS_LOADED, {
-                loader: this
+                loader: this,
+                name: this.data.name
             })
         },
         cloneModel: function (name: string) {
             return this.createModel(this.modelSource, name);
         },
         createModel: function (model: any, name: any) {
-            var specifiedObject = model.getObjectByName(name);
-            if (specifiedObject) {
-                // Clone the specified object
-                var clone = specifiedObject.clone();
+            if (model) {
+                var specifiedObject = model.getObjectByName(name);
+                if (specifiedObject) {
+                    // Clone the specified object
+                    var clone = specifiedObject.clone();
 
-                // The clone is now a separate entity, so it can be directly manipulated. 
-                // Since it's being added to this.el, its position is relative to this.el's position.
-                clone.position.set(0, 0, 0); // This positions the clone at (0, 0, 0) relative to this.el
-                clone.visible = true; // Make sure the clone is visible
+                    // The clone is now a separate entity, so it can be directly manipulated. 
+                    // Since it's being added to this.el, its position is relative to this.el's position.
+                    clone.position.set(0, 0, 0); // This positions the clone at (0, 0, 0) relative to this.el
+                    clone.visible = true; // Make sure the clone is visible
 
-                // Since THREE.js objects are added to entities in A-Frame via the object3D property, do:
-                this.el.object3D.add(clone);
+                    // Since THREE.js objects are added to entities in A-Frame via the object3D property, do:
+                    this.el.object3D.add(clone);
 
-                // Update internal references to include the cloned object for any future interactions
-                return clone;
+                    // Update internal references to include the cloned object for any future interactions
+                    return clone;
+                }
             }
             return null;
         },
@@ -61,6 +67,10 @@ export default function () {
             if (this.modelSource && this.data.name) {
                 this.createModel(this.modelSource, this.data.name);
             }
+            raiseCustomEvent(SpaceshipEvents.SPACE_SHIP_LOADED, {
+                loader: this,
+                name: this.data.name
+            })
         },
         init: function () {
             let me = this;
@@ -70,7 +80,7 @@ export default function () {
             window.addEventListener(SpaceshipEvents.MODELS_LOADED, this.onSpaceShipLoaded);
             window.addEventListener(SpaceshipEvents.SHIP_PART_INIT, function (evt: any) {
                 const { detail } = evt;
-                if (detail?.shipPart) {
+                if (detail?.shipPart && detail?.name === me.data.name) {
                     detail.shipPart.setLoader(me);
                 }
             });

@@ -8,7 +8,8 @@ export default function () {
     const AFRAME: any = (window as any).AFRAME || {}
     AFRAME.registerComponent('ship-part', {
         schema: {
-            name: { type: 'string' }
+            name: { type: 'string' },
+            modelName: { type: 'string' }
         },
         update: function (oldData: any) {
             this.setup()
@@ -18,7 +19,9 @@ export default function () {
         },
         onSpaceShipLoaded: function (evt: any) {
             let { detail } = evt;
-            this.setLoader(detail.loader)
+            if (detail.name === this.data.modelName) {
+                this.setLoader(detail.loader)
+            }
         },
         setLoader: function (loader: any) {
             this.loader = loader;
@@ -33,19 +36,23 @@ export default function () {
             if (this.data.name && this.loader) {
                 if (!this.model) {
                     let model = this.loader.cloneModel(this.data.name);
-                    let entity: any = document.createElement('a-entity');
-                    entity.object3D.add(model);
-                    this.el.appendChild(entity);
-                    this.entity = entity;
-                    this.model = model;
+                    if (model) {
+                        let entity: any = document.createElement('a-entity');
+                        entity.object3D.add(model);
+                        this.el.appendChild(entity);
+                        this.entity = entity;
+                        this.model = model;
+                    }
                 }
             }
         },
         init: function () {
             this.bindMethods();
+            window.addEventListener(SpaceshipEvents.SPACE_SHIP_LOADED, this.onSpaceShipLoaded)
             window.addEventListener(SpaceshipEvents.MODELS_LOADED, this.onSpaceShipLoaded);
             raiseCustomEvent(SpaceshipEvents.SHIP_PART_INIT, {
-                shipPart: this
+                shipPart: this,
+                name: this.data.modelName
             });
         }
     });
@@ -57,6 +64,7 @@ export default function () {
         mappings: {
             //gui item general
             'name': 'ship-part.name',
+            'model-name': 'ship-part.modelName'
         }
     });
 };

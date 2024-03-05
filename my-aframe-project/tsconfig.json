@@ -22,6 +22,7 @@
   },
   "include": [
     "src/**/*",
-    "types/**/*"
+    "types/**/*",
+    "node_modules/a-frame-components/types/**/*"
   ]
 }
