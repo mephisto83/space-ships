@@ -1,4 +1,4 @@
-import { getShipScaleFor } from "../../shipparts";
+import { convertBlenderToAFrameCoordinates, getShipPartFacePosition, getShipScaleFor, scaleFace } from "../../shipparts";
 
 export default function () {
     const AFRAME: any = (window as any).AFRAME || {};
@@ -24,6 +24,20 @@ export default function () {
             let shipPart: any = document.createElement('a-ship-part');
             shipPart.setAttribute('name', `${part}`);
             shipPart.setAttribute('model-name', `${modelName}`);
+            let face_positions = getShipPartFacePosition(`${part}`);
+            this.facePositions = [];
+            if (face_positions) {
+                // face_positions = face_positions?.map(f => scaleFace(f, scale));
+                this.facePositions = face_positions.map((fp) => {
+                    let sphere = document.createElement('a-sphere');
+                    let pos = convertBlenderToAFrameCoordinates(fp.position);
+                    sphere.setAttribute('radius', '.1');
+                    sphere.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+                    sphere.setAttribute('color', 'red');
+                    shipPart.appendChild(sphere);
+                    return sphere;
+                })
+            }
 
             let text = document.createElement('a-troika-text');
             text.setAttribute('anchor', 'center');
