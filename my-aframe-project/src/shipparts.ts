@@ -26,6 +26,48 @@ export function getShipPartsFromCollection(collection: string) {
     return parts.filter(x => x.collection === collection).map(d => d.object_name);
 }
 
+
+export function getRandomPartsFrom(collection: string, count: number, seed: string): string[] {
+    let parts = getShipPartsFromCollection(collection);
+    return seededSelection(parts, count, seed);
+}
+
+export function stringToSeed(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = (hash << 5) - hash + char;
+        hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
+}
+
+export function seed(str: string, max: number): number {
+    let num = stringToSeed(str);
+    return num % max;
+}
+
+export function seededRandomGenerator(seed: number): () => number {
+    return function () {
+        seed = (seed * 9301 + 49297) % 233280;
+        return seed / 233280;
+    };
+}
+
+export function seededSelection<T>(items: T[], count: number, seedStr: string): T[] {
+    let seed = stringToSeed(seedStr);
+    const random = seededRandomGenerator(seed);
+
+    const indices = Array.from(items.keys());
+
+    for (let i = indices.length - 1; i > 0; i--) {
+        const j = Math.floor(random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    const selectedIndices = indices.slice(0, count);
+    return selectedIndices.map(index => items[index]);
+}
 export function calculateScaleToFit(
     objectDimensions: { height: number; width: number; depth: number },
     boxSize: number
@@ -71,7 +113,174 @@ export function getShipScaleFor(name: string, size: number) {
         height: dimensions?.height || 1
     }, size);
 }
-interface FacePosition {
+function radiansToDegrees(radians: number): number {
+    return radians * (180 / Math.PI);
+}
+
+interface Vector3 {
+    x: number;
+    y: number;
+    z: number;
+}
+
+function calculateDirectionVector(from: Vector3, to: Vector3): Vector3 {
+    return {
+        x: to.x - from.x,
+        y: to.y - from.y,
+        z: to.z - from.z
+    };
+}
+
+function normalizeVector(vector: Vector3): Vector3 {
+    const length = Math.sqrt(vector.x ** 2 + vector.y ** 2 + vector.z ** 2);
+    return {
+        x: vector.x / length,
+        y: vector.y / length,
+        z: vector.z / length
+    };
+}
+interface Vector3 {
+    x: number;
+    y: number;
+    z: number;
+}
+
+interface Quaternion {
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+}
+
+function vectorToQuaternion(normal: Vector3): Quaternion {
+    // Assuming the default vector is the Z-axis
+    const defaultVector: Vector3 = { x: 0, y: 0, z: 1 };
+    const crossProduct: Vector3 = {
+        x: defaultVector.y * normal.z - defaultVector.z * normal.y,
+        y: defaultVector.z * normal.x - defaultVector.x * normal.z,
+        z: defaultVector.x * normal.y - defaultVector.y * normal.x,
+    };
+
+    const dotProduct = defaultVector.x * normal.x + defaultVector.y * normal.y + defaultVector.z * normal.z;
+    const s = Math.sqrt((1 + dotProduct) * 2);
+    const invS = 1 / s;
+
+    return {
+        x: crossProduct.x * invS,
+        y: crossProduct.y * invS,
+        z: crossProduct.z * invS,
+        w: s * 0.5,
+    };
+}
+
+function quaternionToEuler(quaternion: Quaternion): Vector3 {
+    const { x, y, z, w } = quaternion;
+
+    const sinr_cosp = 2 * (w * x + y * z);
+    const cosr_cosp = 1 - 2 * (x * x + y * y);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp);
+
+    const sinp = 2 * (w * y - z * x);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp);
+
+    const siny_cosp = 2 * (w * z + x * y);
+    const cosy_cosp = 1 - 2 * (y * y + z * z);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp);
+
+    // Convert from radians to degrees, if necessary
+    return {
+        x: roll,
+        y: pitch,
+        z: yaw,
+    };
+}
+
+export function calculateDistanceBetweenVectors(vectorA: Vector3, vectorB: Vector3): number {
+    const xDiff = vectorB.x - vectorA.x;
+    const yDiff = vectorB.y - vectorA.y;
+    const zDiff = vectorB.z - vectorA.z;
+
+    return Math.sqrt(xDiff ** 2 + yDiff ** 2 + zDiff ** 2);
+}
+// Adjusts the second point to face the first point
+export function adjustSecondPointToFaceFirst(
+    pointA: {
+        position: Vector3; normal: Vector3;
+    },
+    pointB: {
+        position: Vector3; normal: Vector3;
+    }, desiredDistance?: number): {
+        position: Vector3;
+        rotation: Vector3;
+    } {
+    const directionVector = calculateDirectionVector(pointB.position, pointA.position);
+    const normalizedDirection = normalizeVector(directionVector);
+
+    // Calculate rotation for point B's normal to face point A
+    const rotationQuaternionB = vectorToQuaternion(normalizedDirection);
+    const rotationEulerB = quaternionToEuler(rotationQuaternionB); // If needed
+
+    let newPositionB = pointB.position;
+    if (desiredDistance !== undefined) {
+        // Move point B to be at `desiredDistance` from point A
+        newPositionB = {
+            x: pointA.position.x - normalizedDirection.x * desiredDistance,
+            y: pointA.position.y - normalizedDirection.y * desiredDistance,
+            z: pointA.position.z - normalizedDirection.z * desiredDistance
+        };
+    }
+
+    return {
+        position: newPositionB,
+        rotation: convertEulerRadiansToDegrees(rotationEulerB) // or `rotationEulerB` if using Euler angles
+    };
+}
+
+export function convertEulerRadiansToDegrees(eulerRadians: Vector3d): Vector3 {
+    return {
+        x: radiansToDegrees(eulerRadians.x),
+        y: radiansToDegrees(eulerRadians.y),
+        z: radiansToDegrees(eulerRadians.z),
+    };
+}
+
+export function calculateRotationToNormal(normal: Vector3d): Vector3d {
+    // Assuming initial vector pointing in the Z-axis direction (0, 0, 1)
+    const initialVector: Vector3d = { x: 0, y: 0, z: 1 };
+
+    // Calculate the cross product to find the rotation axis
+    const rotationAxis: Vector3d = {
+        x: initialVector.y * normal.z - initialVector.z * normal.y,
+        y: initialVector.z * normal.x - initialVector.x * normal.z,
+        z: initialVector.x * normal.y - initialVector.y * normal.x
+    };
+
+    // Calculate the angle between the vectors
+    const dotProduct = initialVector.x * normal.x + initialVector.y * normal.y + initialVector.z * normal.z;
+    const angle = Math.acos(dotProduct); // Angle in radians
+
+    // To find the Euler angles (in radians) from the rotation axis and angle,
+    // one could use conversion formulas or a library like three.js for more complex calculations.
+    // For simplicity, this example will assume a direct conversion for scenarios aligned with cardinal axes.
+    // Note: This simplistic approach does not account for all cases or gimbal lock.
+
+    // Assuming the rotation axis is normalized
+    let rotationMagnitude = Math.sqrt(rotationAxis.x ** 2 + rotationAxis.y ** 2 + rotationAxis.z ** 2);
+    let normalizedAxis = {
+        x: rotationAxis.x / rotationMagnitude,
+        y: rotationAxis.y / rotationMagnitude,
+        z: rotationAxis.z / rotationMagnitude
+    };
+
+    // Simple approach: assuming rotation primarily around a single axis for demonstration
+    return {
+        x: normalizedAxis.x * angle,
+        y: normalizedAxis.y * angle,
+        z: normalizedAxis.z * angle
+    };
+}
+
+export interface FacePosition {
     position: Vector3d;
     normal: Vector3d;
 }
@@ -98,9 +307,38 @@ function scalePosition(position: Vector3d, scale: number): Vector3d {
         z: position.z * scale,
     };
 }
+interface Dimension {
+    width: number;
+    height: number;
+    depth: number;
+}
 
-export function getShipParts() {
-    return {
+interface Position {
+    x: number;
+    y: number;
+    z: number;
+}
+
+interface Normal {
+    x: number;
+    y: number;
+    z: number;
+}
+
+interface FaceInformation {
+    position: Position;
+    normal: Normal;
+}
+
+interface Component {
+    collection: string;
+    object_name: string;
+    dimensions: Dimension;
+    face_information: FaceInformation[];
+}
+
+export function getShipParts(): { [key: string]: Component } {
+    let temp = {
         "Components_ventPortBlock": {
             "collection": "Components",
             "object_name": "ventPortBlock",
@@ -3801,7 +4039,44 @@ export function getShipParts() {
                 "height": 2.5081124305725098,
                 "depth": 4.222699165344238
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.960464477539063e-08,
+                        "y": 0.8528827428817749,
+                        "z": -1.0
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 3.725290298461914e-08,
+                        "y": -1.315362811088562,
+                        "z": 0.19383400678634644
+                    },
+                    "normal": {
+                        "x": -7.585723693637192e-08,
+                        "y": 1.0,
+                        "z": 6.483411652880022e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.980232238769531e-07,
+                        "y": 1.0631927251815796,
+                        "z": 1.5081124305725098
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": -1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.split": {
             "collection": "Engines",
@@ -3811,7 +4086,20 @@ export function getShipParts() {
                 "height": 2.151318311691284,
                 "depth": 3.7014355659484863
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 8.195638656616211e-08,
+                        "y": 0.8458494544029236,
+                        "z": 0.09423238784074783
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.slant": {
             "collection": "Engines",
@@ -3821,7 +4109,44 @@ export function getShipParts() {
                 "height": 3.020310878753662,
                 "depth": 5.27656364440918
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 3.2782554626464844e-07,
+                        "y": 0.8713902235031128,
+                        "z": -1.3923373222351074
+                    },
+                    "normal": {
+                        "x": 1.1517867280590177e-13,
+                        "y": 2.3155553208198398e-07,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 7.599592208862305e-07,
+                        "y": 2.8752479553222656,
+                        "z": 0.5653234720230103
+                    },
+                    "normal": {
+                        "x": 6.914004870850476e-07,
+                        "y": 1.0,
+                        "z": 2.5568087380634097e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.9744038581848145e-07,
+                        "y": 1.9410072565078735,
+                        "z": 1.5858515501022339
+                    },
+                    "normal": {
+                        "x": 4.310394530193662e-08,
+                        "y": 0.04444011673331261,
+                        "z": 0.9990121126174927
+                    }
+                }
+            ]
         },
         "Engines_eng.Rect": {
             "collection": "Engines",
@@ -3831,7 +4156,44 @@ export function getShipParts() {
                 "height": 1.1659095287322998,
                 "depth": 2.261922836303711
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -2.2351741790771484e-08,
+                        "y": -0.3545386791229248,
+                        "z": -0.5829547047615051
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -6.332993507385254e-08,
+                        "y": -0.35453885793685913,
+                        "z": 0.5829547047615051
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.682209014892578e-07,
+                        "y": 1.0295403003692627,
+                        "z": 3.110617399215698e-07
+                    },
+                    "normal": {
+                        "x": -5.818427553094807e-07,
+                        "y": -1.0,
+                        "z": -1.6527989146197797e-06
+                    }
+                }
+            ]
         },
         "Engines_eng.Vanes": {
             "collection": "Engines",
@@ -3841,7 +4203,56 @@ export function getShipParts() {
                 "height": 2.209927558898926,
                 "depth": 3.772857189178467
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.1448802947998047,
+                        "y": 0.7229596972465515,
+                        "z": 1.043081283569336e-07
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -2.738445630257047e-07,
+                        "z": -2.886140464397613e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.144880771636963,
+                        "y": 0.7229592204093933,
+                        "z": 5.960464477539063e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 2.738451030381839e-07,
+                        "z": -7.215348318823089e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.6197640895843506,
+                        "y": 1.3951106071472168,
+                        "z": 3.725290298461914e-07
+                    },
+                    "normal": {
+                        "x": -5.575766977017338e-07,
+                        "y": -1.0,
+                        "z": -1.8701068427162681e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.619763970375061,
+                        "y": 1.3951101303100586,
+                        "z": 3.8743019104003906e-07
+                    },
+                    "normal": {
+                        "x": -2.787884625377046e-07,
+                        "y": -1.0,
+                        "z": -2.805157919283374e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.5Pole": {
             "collection": "Engines",
@@ -3851,7 +4262,20 @@ export function getShipParts() {
                 "height": 2.151165246963501,
                 "depth": 3.0853466987609863
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 5.960464477539063e-08,
+                        "y": 1.9686100482940674,
+                        "z": 2.682209014892578e-07
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.splt": {
             "collection": "Engines",
@@ -3861,7 +4285,44 @@ export function getShipParts() {
                 "height": 3.1095120906829834,
                 "depth": 3.9904916286468506
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -7.525086402893066e-07,
+                        "y": 2.932424783706665,
+                        "z": 4.470348358154297e-08
+                    },
+                    "normal": {
+                        "x": -7.583511205666582e-07,
+                        "y": 0.9999999403953552,
+                        "z": -2.113317387839736e-14
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.717179298400879e-07,
+                        "y": 0.5891363024711609,
+                        "z": -1.4433095455169678
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.419156074523926e-07,
+                        "y": 0.4748955965042114,
+                        "z": 1.6662025451660156
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.vacuum": {
             "collection": "Engines",
@@ -3871,7 +4332,44 @@ export function getShipParts() {
                 "height": 1.8935508728027344,
                 "depth": 4.884524822235107
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 4.470348358154297e-08,
+                        "y": 2.4422624111175537,
+                        "z": 0.3881209194660187
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.6391277313232422e-07,
+                        "y": -1.9421532154083252,
+                        "z": -0.9467753171920776
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.384185791015625e-07,
+                        "y": -2.4422624111175537,
+                        "z": -0.6569198369979858
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.flap": {
             "collection": "Engines",
@@ -3881,7 +4379,32 @@ export function getShipParts() {
                 "height": 1.4498891830444336,
                 "depth": 2.4291086196899414
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.4126031696796417,
+                        "y": -0.6739364862442017,
+                        "z": 1.1920928955078125e-07
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.41390538215637207,
+                        "y": -0.6739365458488464,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.ladder": {
             "collection": "Engines",
@@ -3891,7 +4414,20 @@ export function getShipParts() {
                 "height": 3.198045492172241,
                 "depth": 5.29780387878418
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.1175870895385742e-08,
+                        "y": -0.20679593086242676,
+                        "z": -0.21557378768920898
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                }
+            ]
         },
         "Engines_eng.trumpet": {
             "collection": "Engines",
@@ -3901,7 +4437,32 @@ export function getShipParts() {
                 "height": 1.3192380666732788,
                 "depth": 2.6605310440063477
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.8420900702476501,
+                        "y": 0.5433015823364258,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -3.3423847867197765e-07,
+                        "z": 2.6719817469711415e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.8420898914337158,
+                        "y": 0.5433018207550049,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -3.3423847867197765e-07,
+                        "z": -2.671962420208729e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.multi": {
             "collection": "Engines",
@@ -3911,7 +4472,20 @@ export function getShipParts() {
                 "height": 1.5542430877685547,
                 "depth": 2.619231700897217
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.6933333873748779,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9999999403953552,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.Y-block": {
             "collection": "Engines",
@@ -3921,7 +4495,56 @@ export function getShipParts() {
                 "height": 2.7816171646118164,
                 "depth": 3.694200038909912
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.587935447692871e-08,
+                        "y": -0.4055080711841583,
+                        "z": 1.2503526210784912
+                    },
+                    "normal": {
+                        "x": -1.8645162996010212e-13,
+                        "y": -1.3534415188587445e-07,
+                        "z": 0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.1175870895385742e-08,
+                        "y": 0.17865344882011414,
+                        "z": -1.0784690380096436
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.5474571585655212,
+                        "y": -0.01837824285030365,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -1.902439521472843e-07,
+                        "z": -2.8782810090888233e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.5474571585655212,
+                        "y": -0.018378283828496933,
+                        "z": 7.450580596923828e-09
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 4.4390256448423315e-07,
+                        "z": 2.8782781669178803e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.body.wide_mouth": {
             "collection": "Engines",
@@ -3931,7 +4554,44 @@ export function getShipParts() {
                 "height": 1.704000473022461,
                 "depth": 2.5061092376708984
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -4.470348358154297e-08,
+                        "y": -0.0454743355512619,
+                        "z": -0.9157310724258423
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.195638656616211e-08,
+                        "y": 1.2622241973876953,
+                        "z": -5.960464477539063e-08
+                    },
+                    "normal": {
+                        "x": -1.3814752719554235e-07,
+                        "y": 1.0,
+                        "z": -1.5136704689666658e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.8312206268310547e-07,
+                        "y": 0.15169493854045868,
+                        "z": 0.7882693409919739
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.foot": {
             "collection": "Engines",
@@ -3941,7 +4601,20 @@ export function getShipParts() {
                 "height": 2.600588321685791,
                 "depth": 5.169995307922363
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 3.039836883544922e-06,
+                        "y": 3.6090972423553467,
+                        "z": 1.1501156091690063
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.chin": {
             "collection": "Engines",
@@ -3951,7 +4624,44 @@ export function getShipParts() {
                 "height": 2.033602714538574,
                 "depth": 3.082383632659912
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.825392246246338e-07,
+                        "y": -1.6195149421691895,
+                        "z": 1.1761444807052612
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.6391277313232422e-07,
+                        "y": -1.619515061378479,
+                        "z": -0.28030550479888916
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.862645149230957e-07,
+                        "y": -1.9860248565673828,
+                        "z": 0.4479195773601532
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": 2.0667903299909085e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.body.split": {
             "collection": "Engines",
@@ -3961,7 +4671,20 @@ export function getShipParts() {
                 "height": 1.9734020233154297,
                 "depth": 4.692239761352539
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.7728974223136902,
+                        "y": -1.3785842657089233,
+                        "z": -0.24696575105190277
+                    },
+                    "normal": {
+                        "x": -8.752791380572944e-09,
+                        "y": -2.195498893797776e-07,
+                        "z": -1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.onion": {
             "collection": "Engines",
@@ -3971,7 +4694,20 @@ export function getShipParts() {
                 "height": 1.498645305633545,
                 "depth": 2.654264450073242
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 1.4760510921478271,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.cylindar": {
             "collection": "Engines",
@@ -3981,7 +4717,20 @@ export function getShipParts() {
                 "height": 3.684535026550293,
                 "depth": 5.292727470397949
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.4832168221473694,
+                        "z": -0.28498274087905884
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.bit": {
             "collection": "Engines",
@@ -3991,7 +4740,20 @@ export function getShipParts() {
                 "height": 1.4323081970214844,
                 "depth": 2.3026914596557617
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.960464477539063e-08,
+                        "y": 0.5562567710876465,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.fish": {
             "collection": "Engines",
@@ -4001,7 +4763,44 @@ export function getShipParts() {
                 "height": 3.0411081314086914,
                 "depth": 3.931370258331299
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 3.725290298461914e-09,
+                        "y": -0.1493513286113739,
+                        "z": 1.5293697118759155
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.948807716369629e-07,
+                        "y": -1.6859885454177856,
+                        "z": 1.1920928955078125e-07
+                    },
+                    "normal": {
+                        "x": -1.4505171748169232e-06,
+                        "y": -0.9999999403953552,
+                        "z": 3.0128867933854053e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 4.0978193283081055e-08,
+                        "y": -0.3155425190925598,
+                        "z": -1.4850075244903564
+                    },
+                    "normal": {
+                        "x": -8.336978218892455e-09,
+                        "y": 0.06862228363752365,
+                        "z": -0.9976426959037781
+                    }
+                }
+            ]
         },
         "Engines_BracketEngine": {
             "collection": "Engines",
@@ -4011,7 +4810,140 @@ export function getShipParts() {
                 "height": 2.3532865047454834,
                 "depth": 5.011017799377441
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 4.172325134277344e-07,
+                        "y": 1.0393962860107422,
+                        "z": 1.0916571617126465
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 4.172325134277344e-07,
+                        "y": -0.3007984459400177,
+                        "z": 1.0916571617126465
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.8408308029174805,
+                        "y": 0.45980939269065857,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 3.9306002008743235e-07,
+                        "z": -5.726076324208407e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.8408311605453491,
+                        "y": -0.6205722093582153,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 3.275499409483018e-07,
+                        "z": -5.010317636333639e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.8408315181732178,
+                        "y": -1.7009539604187012,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 3.930598779788852e-07,
+                        "z": -4.2945578115904937e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.8408305644989014,
+                        "y": -1.7009546756744385,
+                        "z": 3.725290298461914e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -3.9305982113546634e-07,
+                        "z": 1.0020632998930523e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.8408308029174805,
+                        "y": -0.6205729842185974,
+                        "z": 2.2351741790771484e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -3.275499409483018e-07,
+                        "z": 2.1472774847097753e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.8408312797546387,
+                        "y": 0.4598087966442108,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -3.9305990640059463e-07,
+                        "z": -5.726078597945161e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.940696716308594e-08,
+                        "y": 0.34013399481773376,
+                        "z": -1.015000581741333
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.940696716308594e-08,
+                        "y": -1.615709662437439,
+                        "z": -0.9745156764984131
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 4.3213367462158203e-07,
+                        "y": 1.3740025758743286,
+                        "z": 0.13240346312522888
+                    },
+                    "normal": {
+                        "x": 3.6611734799407714e-07,
+                        "y": 1.0,
+                        "z": 1.130088548961794e-06
+                    }
+                }
+            ]
         },
         "Engines_BlockEnginesingle": {
             "collection": "Engines",
@@ -4019,9 +4951,70 @@ export function getShipParts() {
             "dimensions": {
                 "width": 1.9536638259887695,
                 "height": 2.519076108932495,
-                "depth": 5.985849380493164
+                "depth": 5.986325263977051
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.7881393432617188e-07,
+                        "y": 0.9115967750549316,
+                        "z": -1.2404803037643433
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9302399158477783,
+                        "y": 1.1677838563919067,
+                        "z": 0.554106593132019
+                    },
+                    "normal": {
+                        "x": 0.9964834451675415,
+                        "y": -1.4203901343989855e-07,
+                        "z": 0.08378875255584717
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.930240273475647,
+                        "y": 1.1677850484848022,
+                        "z": 0.554106593132019
+                    },
+                    "normal": {
+                        "x": -0.996483564376831,
+                        "y": 1.51650695556782e-07,
+                        "z": 0.08378853648900986
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.086162567138672e-07,
+                        "y": 1.1268330812454224,
+                        "z": 1.2785958051681519
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.06380832195281982,
+                        "y": 3.7036056518554688,
+                        "z": 0.0035437047481536865
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9998817443847656,
+                        "z": -0.015378964133560658
+                    }
+                }
+            ]
         },
         "Engines_5-Engine": {
             "collection": "Engines",
@@ -4031,7 +5024,20 @@ export function getShipParts() {
                 "height": 3.263840436935425,
                 "depth": 5.4085845947265625
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.8229644894599915,
+                        "z": 0.6461273431777954
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_FishEngine": {
             "collection": "Engines",
@@ -4041,7 +5047,20 @@ export function getShipParts() {
                 "height": 3.039275884628296,
                 "depth": 4.7016825675964355
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.5274556875228882,
+                        "y": 0.6192677021026611,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Engines_Trusswork-Wing": {
             "collection": "Engines",
@@ -4051,7 +5070,56 @@ export function getShipParts() {
                 "height": 1.0821882486343384,
                 "depth": 3.9000256061553955
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.9093685150146484,
+                        "y": 1.1165354251861572,
+                        "z": 0.22280937433242798
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9093685150146484,
+                        "y": 1.8237316608428955,
+                        "z": -0.20588919520378113
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9093685150146484,
+                        "y": -1.5293235778808594,
+                        "z": -0.20588919520378113
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9093685150146484,
+                        "y": -0.6715652942657471,
+                        "z": 0.22280937433242798
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Engines_Trap-Engine": {
             "collection": "Engines",
@@ -4061,17 +5129,91 @@ export function getShipParts() {
                 "height": 6.174328804016113,
                 "depth": 7.267556190490723
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.3527263402938843,
+                        "y": -2.0330190658569336,
+                        "z": 2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 4.1674715589579137e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.3527263402938843,
+                        "y": -0.6776732802391052,
+                        "z": 2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -8.795486650114981e-08,
+                        "z": 1.0418678186852048e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.3527265787124634,
+                        "y": 1.0146745443344116,
+                        "z": 7.450580596923828e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -8.811390728169499e-08,
+                        "z": -5.209338738154656e-08
+                    }
+                }
+            ]
         },
         "Engines_CubeEngine": {
             "collection": "Engines",
             "object_name": "CubeEngine",
             "dimensions": {
                 "width": 3.0264713764190674,
-                "height": 3.6405458450317383,
+                "height": 3.6405463218688965,
                 "depth": 9.330972671508789
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.5042812824249268,
+                        "y": -1.3572174310684204,
+                        "z": -0.33387091755867004
+                    },
+                    "normal": {
+                        "x": 0.9999128580093384,
+                        "y": -0.013203214854001999,
+                        "z": -1.8667289225504646e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.5042812824249268,
+                        "y": -1.3572174310684204,
+                        "z": -0.33387091755867004
+                    },
+                    "normal": {
+                        "x": -0.9999128580093384,
+                        "y": -0.013203214854001999,
+                        "z": -1.8667289225504646e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 1.056668758392334,
+                        "z": -2.1304006576538086
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.bit.001": {
             "collection": "Engines",
@@ -4081,7 +5223,20 @@ export function getShipParts() {
                 "height": 1.1809332370758057,
                 "depth": 1.8985610008239746
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.4586317837238312,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.bit.002": {
             "collection": "Engines",
@@ -4091,7 +5246,20 @@ export function getShipParts() {
                 "height": 1.1809332370758057,
                 "depth": 1.8985610008239746
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.4586317837238312,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.bit.003": {
             "collection": "Engines",
@@ -4101,7 +5269,20 @@ export function getShipParts() {
                 "height": 1.1809332370758057,
                 "depth": 1.8985610008239746
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.4586317837238312,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.bit.004": {
             "collection": "Engines",
@@ -4111,7 +5292,20 @@ export function getShipParts() {
                 "height": 1.1809332370758057,
                 "depth": 1.8985610008239746
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.4586317837238312,
+                        "z": -2.9802322387695312e-08
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Engines_eng.body.Y-block.001": {
             "collection": "Engines",
@@ -4121,7 +5315,56 @@ export function getShipParts() {
                 "height": 4.6281962394714355,
                 "depth": 6.146597862243652
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.8998980522155762e-07,
+                        "y": -0.674704909324646,
+                        "z": 2.080400228500366
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.2351741790771484e-08,
+                        "y": 0.29725271463394165,
+                        "z": -1.7944116592407227
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.9108870625495911,
+                        "y": -0.03057878464460373,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 4.573581406930316e-07,
+                        "z": 3.459782362824626e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9108870625495911,
+                        "y": -0.030578553676605225,
+                        "z": 1.4901161193847656e-08
+                    },
+                    "normal": {
+                        "x": -0.9999999403953552,
+                        "y": -7.24150481801189e-07,
+                        "z": -2.8831479426116857e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.body.Y-block.002": {
             "collection": "Engines",
@@ -4131,27 +5374,102 @@ export function getShipParts() {
                 "height": 4.6281962394714355,
                 "depth": 6.146597862243652
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.8998980522155762e-07,
+                        "y": -0.674704909324646,
+                        "z": 2.080400228500366
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.2351741790771484e-08,
+                        "y": 0.29725271463394165,
+                        "z": -1.7944116592407227
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9108870625495911,
+                        "y": -0.03057878464460373,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -4.573581406930316e-07,
+                        "z": -3.459782362824626e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.9108870625495911,
+                        "y": -0.030578553676605225,
+                        "z": 1.4901161193847656e-08
+                    },
+                    "normal": {
+                        "x": -0.9999999403953552,
+                        "y": 7.24150481801189e-07,
+                        "z": 2.8831479426116857e-07
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.cylinda.000": {
             "collection": "Engines",
             "object_name": "eng.strut.cylinda.000",
             "dimensions": {
                 "width": 1.7861719131469727,
-                "height": 3.684535026550293,
+                "height": 3.684535264968872,
                 "depth": 5.292727470397949
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.960464477539063e-08,
+                        "y": 2.9802322387695312e-08,
+                        "z": -0.2849828004837036
+                    },
+                    "normal": {
+                        "x": 9.219120045145246e-08,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Engines_eng.strut.cylinda.001": {
             "collection": "Engines",
             "object_name": "eng.strut.cylinda.001",
             "dimensions": {
                 "width": 1.7861719131469727,
-                "height": 3.684535026550293,
+                "height": 3.684535264968872,
                 "depth": 5.292727470397949
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 5.960464477539063e-08,
+                        "y": 5.960464477539063e-08,
+                        "z": 0.2849828004837036
+                    },
+                    "normal": {
+                        "x": 8.60116387002563e-08,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_mushroom": {
             "collection": "Greebly",
@@ -4161,7 +5479,20 @@ export function getShipParts() {
                 "height": 1.1528700590133667,
                 "depth": 0.7817493081092834
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.051233921200037
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_portalblock": {
             "collection": "Greebly",
@@ -4171,7 +5502,44 @@ export function getShipParts() {
                 "height": 0.987604022026062,
                 "depth": 2.0067198276519775
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.960464477539063e-08,
+                        "y": -0.9999999403953552,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0473424936208175e-06,
+                        "y": -1.0,
+                        "z": -2.9946255608592764e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.960464477539063e-08,
+                        "y": 1.0,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 9.241255725100928e-07,
+                        "y": 1.0,
+                        "z": 7.78602043283172e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.2351741790771484e-08,
+                        "y": 1.043081283569336e-07,
+                        "z": -0.24879857897758484
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                }
+            ]
         },
         "Greebly_misc": {
             "collection": "Greebly",
@@ -4181,7 +5549,56 @@ export function getShipParts() {
                 "height": 2.3288376331329346,
                 "depth": 4.650140762329102
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.16083404421806335,
+                        "y": 2.7939677238464355e-08,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 8.121979533370904e-08,
+                        "z": -3.653376268175634e-08
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.501530110836029,
+                        "y": -7.450580596923828e-08,
+                        "z": -1.0691688060760498
+                    },
+                    "normal": {
+                        "x": -0.06851861625909805,
+                        "y": 0.0,
+                        "z": -0.9976497292518616
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.8948370218276978,
+                        "y": -7.078051567077637e-08,
+                        "z": -0.9581408500671387
+                    },
+                    "normal": {
+                        "x": 0.9976497888565063,
+                        "y": 0.0,
+                        "z": -0.06851933151483536
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.8363078236579895,
+                        "y": -1.0244548320770264e-07,
+                        "z": -0.4311625361442566
+                    },
+                    "normal": {
+                        "x": 0.9976497292518616,
+                        "y": 0.0,
+                        "z": -0.06851911544799805
+                    }
+                }
+            ]
         },
         "Greebly_Cargobox": {
             "collection": "Greebly",
@@ -4191,7 +5608,56 @@ export function getShipParts() {
                 "height": 0.8062325119972229,
                 "depth": 1.5173728466033936
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 6.705522537231445e-08,
+                        "y": 0.7471086382865906,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 4.818887191504473e-07,
+                        "y": 1.0,
+                        "z": 4.818887191504473e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.1175870895385742e-07,
+                        "y": -0.7615455985069275,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 6.660596341134806e-07,
+                        "y": 1.0,
+                        "z": 8.76162786767054e-08
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-08,
+                        "y": 1.1920928955078125e-07,
+                        "z": 0.40311625599861145
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-08,
+                        "y": 2.9802322387695312e-08,
+                        "z": -0.40311625599861145
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.9999999403953552
+                    }
+                }
+            ]
         },
         "Greebly_AngledRib-block": {
             "collection": "Greebly",
@@ -4201,17 +5667,67 @@ export function getShipParts() {
                 "height": 0.3804451823234558,
                 "depth": 1.1540606021881104
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.6763806343078613e-08,
+                        "y": 0.5305603742599487,
+                        "z": -0.10021071135997772
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.587935447692871e-09,
+                        "y": -0.04646993428468704,
+                        "z": -0.10021071135997772
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.725290298461914e-09,
+                        "y": -0.43115678429603577,
+                        "z": -0.10021071135997772
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                }
+            ]
         },
         "Greebly_SplitMast": {
             "collection": "Greebly",
             "object_name": "SplitMast",
             "dimensions": {
                 "width": 0.49948328733444214,
-                "height": 0.4251367449760437,
+                "height": 0.4251367747783661,
                 "depth": 0.3319009840488434
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.01259768009185791,
+                        "z": -0.11437200754880905
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_5mast": {
             "collection": "Greebly",
@@ -4221,7 +5737,20 @@ export function getShipParts() {
                 "height": 0.9981541633605957,
                 "depth": 0.6352875828742981
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.02684319019317627,
+                        "y": 0.0,
+                        "z": -0.49816203117370605
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_5starblock": {
             "collection": "Greebly",
@@ -4231,7 +5760,32 @@ export function getShipParts() {
                 "height": 0.2709156274795532,
                 "depth": 4.0011396408081055
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.0005491375923156738,
+                        "y": -2.0005693435668945,
+                        "z": -0.0005499422550201416
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.0005490779876708984,
+                        "y": 2.000570297241211,
+                        "z": -0.0005498528480529785
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Greebly_DishPanel": {
             "collection": "Greebly",
@@ -4241,7 +5795,20 @@ export function getShipParts() {
                 "height": 0.4754391014575958,
                 "depth": 0.26544898748397827
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -1.1920928955078125e-07,
+                        "z": -0.0036387182772159576
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_Flower": {
             "collection": "Greebly",
@@ -4261,7 +5828,32 @@ export function getShipParts() {
                 "height": 0.42243167757987976,
                 "depth": 2.4232215881347656
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -3.725290298461914e-09,
+                        "y": -0.08429154753684998,
+                        "z": -0.21121583878993988
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -0.21958805620670319,
+                        "z": 0.21121583878993988
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_HexTube": {
             "collection": "Greebly",
@@ -4271,7 +5863,80 @@ export function getShipParts() {
                 "height": 0.3352862298488617,
                 "depth": 0.3650885224342346
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.3524837791919708,
+                        "y": 1.1920928955078125e-07,
+                        "z": -0.16764310002326965
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.3524837791919708,
+                        "y": 1.1920928955078125e-07,
+                        "z": -0.16764310002326965
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.07736632227897644,
+                        "y": 1.1920928955078125e-07,
+                        "z": -0.16764310002326965
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.07736632227897644,
+                        "y": 1.1920928955078125e-07,
+                        "z": -0.16764310002326965
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.35248368978500366,
+                        "y": 1.7881393432617188e-07,
+                        "z": 0.16764312982559204
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.35248371958732605,
+                        "y": 1.7881393432617188e-07,
+                        "z": 0.16764312982559204
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Greebly_Bi-PolarEngine": {
             "collection": "Greebly",
@@ -4281,7 +5946,32 @@ export function getShipParts() {
                 "height": 0.9611667394638062,
                 "depth": 1.565786361694336
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.34586232900619507,
+                        "y": 0.05256307125091553,
+                        "z": -1.4156103134155273e-07
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -4.171268297675605e-14,
+                        "z": -1.0860904922083137e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.34586259722709656,
+                        "y": 0.05256307125091553,
+                        "z": -8.940696716308594e-08
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Hulls_hull.Grill": {
             "collection": "Hulls",
@@ -4292,150 +5982,6 @@ export function getShipParts() {
                 "depth": 14.978105545043945
             },
             "face_information": [
-                {
-                    "position": {
-                        "x": 0.23986196517944336,
-                        "y": 7.82745361328125,
-                        "z": -0.9856532216072083
-                    },
-                    "normal": {
-                        "x": 0.0,
-                        "y": 1.0,
-                        "z": -0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.23986196517944336,
-                        "y": 7.82745361328125,
-                        "z": -0.9856532216072083
-                    },
-                    "normal": {
-                        "x": 0.0,
-                        "y": 1.0,
-                        "z": 0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": 0.19218474626541138,
-                        "y": 7.82745361328125,
-                        "z": -0.2702665627002716
-                    },
-                    "normal": {
-                        "x": 0.0,
-                        "y": 1.0,
-                        "z": 0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.19218474626541138,
-                        "y": 7.82745361328125,
-                        "z": -0.2702665627002716
-                    },
-                    "normal": {
-                        "x": -0.0,
-                        "y": 1.0,
-                        "z": 0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": 0.4409136176109314,
-                        "y": -4.472516059875488,
-                        "z": -0.7816612124443054
-                    },
-                    "normal": {
-                        "x": 2.0994953331410215e-08,
-                        "y": -0.1356373131275177,
-                        "z": -0.9907585382461548
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.4409136176109314,
-                        "y": -4.47251558303833,
-                        "z": -0.7816612124443054
-                    },
-                    "normal": {
-                        "x": -2.0994953331410215e-08,
-                        "y": -0.1356373131275177,
-                        "z": -0.9907585382461548
-                    }
-                },
-                {
-                    "position": {
-                        "x": 1.355054497718811,
-                        "y": 2.0577926635742188,
-                        "z": 0.556010901927948
-                    },
-                    "normal": {
-                        "x": 0.9999996423721313,
-                        "y": 0.0008408488938584924,
-                        "z": 1.4523835488944314e-05
-                    }
-                },
-                {
-                    "position": {
-                        "x": -1.355054497718811,
-                        "y": 2.0577926635742188,
-                        "z": 0.556010901927948
-                    },
-                    "normal": {
-                        "x": -0.9999996423721313,
-                        "y": 0.0008408488938584924,
-                        "z": 1.4523835488944314e-05
-                    }
-                },
-                {
-                    "position": {
-                        "x": 1.3556780815124512,
-                        "y": 0.8452742099761963,
-                        "z": 1.271776556968689
-                    },
-                    "normal": {
-                        "x": 1.0,
-                        "y": 8.046572474995628e-08,
-                        "z": 2.2032907054381212e-08
-                    }
-                },
-                {
-                    "position": {
-                        "x": -1.3556780815124512,
-                        "y": 0.8452742099761963,
-                        "z": 1.2717764377593994
-                    },
-                    "normal": {
-                        "x": -1.0,
-                        "y": 8.046572474995628e-08,
-                        "z": 2.2032907054381212e-08
-                    }
-                },
-                {
-                    "position": {
-                        "x": 0.9690026640892029,
-                        "y": -4.47251558303833,
-                        "z": -0.25062400102615356
-                    },
-                    "normal": {
-                        "x": 0.9823416471481323,
-                        "y": -0.09486540406942368,
-                        "z": -0.16126178205013275
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.9690026640892029,
-                        "y": -4.472515106201172,
-                        "z": -0.25062400102615356
-                    },
-                    "normal": {
-                        "x": -0.9823416471481323,
-                        "y": -0.09486540406942368,
-                        "z": -0.16126178205013275
-                    }
-                },
                 {
                     "position": {
                         "x": 1.056178092956543,
@@ -4486,86 +6032,26 @@ export function getShipParts() {
                 },
                 {
                     "position": {
-                        "x": 1.1475465297698975,
-                        "y": 5.127262592315674,
-                        "z": -0.10192493349313736
-                    },
-                    "normal": {
-                        "x": 0.9864356517791748,
-                        "y": -0.0005548438057303429,
-                        "z": -0.16414736211299896
-                    }
-                },
-                {
-                    "position": {
-                        "x": -1.1475465297698975,
-                        "y": 5.127262592315674,
-                        "z": -0.10192493349313736
-                    },
-                    "normal": {
-                        "x": -0.9864356517791748,
-                        "y": -0.0005548438057303429,
-                        "z": -0.16414736211299896
-                    }
-                },
-                {
-                    "position": {
-                        "x": 1.095022201538086,
-                        "y": 5.850757598876953,
-                        "z": -0.4152660667896271
-                    },
-                    "normal": {
-                        "x": 0.9862224459648132,
-                        "y": 0.0005388223798945546,
-                        "z": -0.1654239147901535
-                    }
-                },
-                {
-                    "position": {
-                        "x": -1.095022201538086,
-                        "y": 5.850757598876953,
-                        "z": -0.4152660667896271
-                    },
-                    "normal": {
-                        "x": -0.9862224459648132,
-                        "y": 0.0005388223798945546,
-                        "z": -0.1654239147901535
-                    }
-                },
-                {
-                    "position": {
-                        "x": 0.2570629119873047,
-                        "y": 8.796798706054688,
-                        "z": 1.718875765800476
-                    },
-                    "normal": {
-                        "x": 0.0,
-                        "y": 1.0,
-                        "z": -0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.2570629119873047,
-                        "y": 8.796798706054688,
-                        "z": 1.718875765800476
-                    },
-                    "normal": {
-                        "x": -0.0,
-                        "y": 1.0,
-                        "z": 0.0
-                    }
-                },
-                {
-                    "position": {
-                        "x": -0.8179129362106323,
+                        "x": 0.8179128766059875,
                         "y": 7.798577308654785,
                         "z": 1.6485648155212402
                     },
                     "normal": {
-                        "x": -0.9566349983215332,
+                        "x": 0.9566349983215332,
                         "y": 0.29128149151802063,
                         "z": -0.00213412893936038
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.7194501161575317,
+                        "y": 7.311549663543701,
+                        "z": 2.3303639888763428
+                    },
+                    "normal": {
+                        "x": -0.8053675889968872,
+                        "y": 0.17531849443912506,
+                        "z": 0.566256582736969
                     }
                 }
             ]
@@ -13907,7 +15393,44 @@ export function getShipParts() {
                 "height": 0.8007861971855164,
                 "depth": 2.3938095569610596
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-08,
+                        "y": 2.9802322387695312e-08,
+                        "z": -0.2692940831184387
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.501772880554199e-07,
+                        "y": -0.7700576782226562,
+                        "z": -0.2692940831184387
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -6.556510925292969e-07,
+                        "y": -1.1824748516082764,
+                        "z": 0.16399642825126648
+                    },
+                    "normal": {
+                        "x": -4.7324525098701997e-07,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Ships_FinRunner.002": {
             "collection": "Ships",
@@ -13917,7 +15440,20 @@ export function getShipParts() {
                 "height": 1.6112067699432373,
                 "depth": 7.205816268920898
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.23821714520454407,
+                        "y": 5.066394805908203e-07,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -4.993070490399987e-08,
+                        "z": 1.4074392140628333e-07
+                    }
+                }
+            ]
         },
         "Ships_FinRunner.001": {
             "collection": "Ships",
@@ -13927,7 +15463,44 @@ export function getShipParts() {
                 "height": 1.6112067699432373,
                 "depth": 7.205816268920898
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.23821714520454407,
+                        "y": 5.066394805908203e-07,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 4.993070490399987e-08,
+                        "z": -1.4074392140628333e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 3.5278499126434326e-06,
+                        "y": 4.525562763214111,
+                        "z": 1.914799213409424e-06
+                    },
+                    "normal": {
+                        "x": 2.147921577488887e-06,
+                        "y": 1.0,
+                        "z": 7.159737265283184e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.3543834686279297e-06,
+                        "y": -2.680251359939575,
+                        "z": -4.76837158203125e-07
+                    },
+                    "normal": {
+                        "x": -1.7514801129436819e-06,
+                        "y": -1.0,
+                        "z": -7.506347401431412e-07
+                    }
+                }
+            ]
         },
         "Ships_WindowBlockhalf.028": {
             "collection": "Ships",
@@ -13937,7 +15510,20 @@ export function getShipParts() {
                 "height": 0.23600387573242188,
                 "depth": 0.9975016117095947
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.023006677627563477,
+                        "y": 0.0513477623462677,
+                        "z": -0.008314497768878937
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": -7.372268100880319e-06
+                    }
+                }
+            ]
         },
         "Ships_WindowBlockhalf.027": {
             "collection": "Ships",
@@ -13947,7 +15533,20 @@ export function getShipParts() {
                 "height": 0.23600387573242188,
                 "depth": 0.9975016117095947
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.027358680963516235,
+                        "y": -0.2246617078781128,
+                        "z": 0.010663270950317383
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Ships_WindowBlockhalf.002": {
             "collection": "Ships",
@@ -13957,7 +15556,20 @@ export function getShipParts() {
                 "height": 0.23600389063358307,
                 "depth": 0.9975016117095947
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.02518269419670105,
+                        "y": -0.0866570770740509,
+                        "z": -0.005383335053920746
+                    },
+                    "normal": {
+                        "x": 0.9999999403953552,
+                        "y": 0.0,
+                        "z": -9.179283466664856e-08
+                    }
+                }
+            ]
         },
         "Ships_WindowBlockhalf.000": {
             "collection": "Ships",
@@ -13967,7 +15579,20 @@ export function getShipParts() {
                 "height": 0.23600389063358307,
                 "depth": 0.9975016117095947
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.02518269419670105,
+                        "y": -0.0866570770740509,
+                        "z": -0.008293498307466507
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": -9.83277459454257e-08
+                    }
+                }
+            ]
         },
         "Ships_hull.lump.001": {
             "collection": "Ships",
@@ -13977,7 +15602,128 @@ export function getShipParts() {
                 "height": 2.827028751373291,
                 "depth": 8.193129539489746
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 8.940696716308594e-07,
+                        "y": 4.739656448364258,
+                        "z": -0.8554085493087769
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.8284882307052612,
+                        "z": -0.5600064992904663
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.662441253662109e-07,
+                        "y": 2.4857640266418457,
+                        "z": 1.3831151723861694
+                    },
+                    "normal": {
+                        "x": -1.9033356162857784e-13,
+                        "y": -3.1542802503281564e-07,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.438923835754395e-07,
+                        "y": 2.4857640266418457,
+                        "z": -1.4439131021499634
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.577139840946984e-07,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.8900190591812134,
+                        "y": 2.4612386226654053,
+                        "z": 2.905726432800293e-07
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 3.9610924318367324e-07,
+                        "z": -5.245223633210117e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.8900200724601746,
+                        "y": 2.461238384246826,
+                        "z": 2.905726432800293e-07
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -4.4271033061704657e-07,
+                        "z": -7.34331422336254e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.8849968910217285e-06,
+                        "y": -3.256704092025757,
+                        "z": -3.8743019104003906e-07
+                    },
+                    "normal": {
+                        "x": -4.910346547148947e-07,
+                        "y": -1.0,
+                        "z": -1.8027032232421913e-13
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.7194619178771973e-07,
+                        "y": -1.028977632522583,
+                        "z": -1.2770813703536987
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.8370490074157715e-07,
+                        "y": -1.028977870941162,
+                        "z": 1.2770812511444092
+                    },
+                    "normal": {
+                        "x": -8.017065201808282e-13,
+                        "y": -4.0815623947310087e-07,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.9134498834609985,
+                        "y": -0.7590206861495972,
+                        "z": -0.0006174147129058838
+                    },
+                    "normal": {
+                        "x": 0.9567577838897705,
+                        "y": 0.2908857464790344,
+                        "z": 1.7206588154294877e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.913453221321106,
+                        "y": -0.759020209312439,
+                        "z": -0.0006174147129058838
+                    },
+                    "normal": {
+                        "x": -0.9567577838897705,
+                        "y": 0.2908857762813568,
+                        "z": -4.916168450108671e-08
+                    }
+                }
+            ]
         },
         "Ships_HandleHull.001": {
             "collection": "Ships",
@@ -13987,7 +15733,44 @@ export function getShipParts() {
                 "height": 1.9307613372802734,
                 "depth": 8.028614044189453
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.03381022810935974,
+                        "y": -4.69774055480957,
+                        "z": 0.12193235754966736
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.4295012354850769,
+                        "y": 3.2820239067077637,
+                        "z": 0.12193182110786438
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.1049299240112305,
+                        "y": -2.798766613006592,
+                        "z": 0.12193211913108826
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Ships_Ram.002": {
             "collection": "Ships",
@@ -13997,7 +15780,32 @@ export function getShipParts() {
                 "height": 2.8021697998046875,
                 "depth": 4.930736541748047
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -1.7524676322937012,
+                        "z": 0.11502537131309509
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.9006348848342896,
+                        "z": 0.5050883293151855
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Ships_CrabClaw.001": {
             "collection": "Ships",
@@ -14007,7 +15815,92 @@ export function getShipParts() {
                 "height": 4.606679916381836,
                 "depth": 6.513511657714844
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -8.940696716308594e-08,
+                        "y": -1.489194631576538,
+                        "z": 0.5423197150230408
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 4.917383193969727e-07,
+                        "y": 1.8582029342651367,
+                        "z": -2.003948211669922
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.195638656616211e-07,
+                        "y": 2.8773913383483887,
+                        "z": -2.003948211669922
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 6.854534149169922e-07,
+                        "y": 4.129878997802734,
+                        "z": 0.742599606513977
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.9371509552001953e-07,
+                        "y": -0.9192732572555542,
+                        "z": -0.9408539533615112
+                    },
+                    "normal": {
+                        "x": -1.987885127618938e-07,
+                        "y": -1.0,
+                        "z": 1.0024144359022102e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-07,
+                        "y": -1.3704746961593628,
+                        "z": -2.1670970916748047
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.384185791015625e-07,
+                        "y": 0.7733111381530762,
+                        "z": 1.7258079051971436
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Ships_Clipbridge.001": {
             "collection": "Ships",
@@ -14027,7 +15920,20 @@ export function getShipParts() {
                 "height": 3.529193878173828,
                 "depth": 5.0434441566467285
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.2814998626708984e-06,
+                        "y": -3.0512120723724365,
+                        "z": 1.4727081060409546
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9999999403953552,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Ships_Ram.001": {
             "collection": "Ships",
@@ -14037,7 +15943,32 @@ export function getShipParts() {
                 "height": 2.8021697998046875,
                 "depth": 4.930736541748047
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -1.7524676322937012,
+                        "z": -0.11502525210380554
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9999999403953552,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -0.44623756408691406,
+                        "z": 0.7012773752212524
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.9999999403953552
+                    }
+                }
+            ]
         },
         "Ships_HandleHull.002": {
             "collection": "Ships",
@@ -14047,7 +15978,44 @@ export function getShipParts() {
                 "height": 1.9307613372802734,
                 "depth": 8.028614044189453
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.03381025791168213,
+                        "y": -4.69774055480957,
+                        "z": 0.12193235754966736
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.0320374965667725,
+                        "y": -2.426274061203003,
+                        "z": 0.1219322681427002
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.42950111627578735,
+                        "y": 3.2820239067077637,
+                        "z": 0.12193182110786438
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": -0.0
+                    }
+                }
+            ]
         },
         "Ships_Gblock.001": {
             "collection": "Ships",
@@ -14057,7 +16025,56 @@ export function getShipParts() {
                 "height": 1.769739031791687,
                 "depth": 7.545317649841309
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -9.685754776000977e-08,
+                        "y": 0.4920387268066406,
+                        "z": -0.8564288020133972
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.4156103134155273e-06,
+                        "y": -3.486660957336426,
+                        "z": 0.3501491844654083
+                    },
+                    "normal": {
+                        "x": 4.765659866734495e-07,
+                        "y": -1.0,
+                        "z": -4.765659866734495e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 4.6193599700927734e-07,
+                        "y": -1.569223403930664,
+                        "z": 0.9133102297782898
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 0.9999999403953552
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.7567148208618164e-07,
+                        "y": -0.9122288227081299,
+                        "z": 0.9133102297782898
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Ships_CruiseShip.001": {
             "collection": "Ships",
@@ -14067,7 +16084,68 @@ export function getShipParts() {
                 "height": 4.127658367156982,
                 "depth": 10.987354278564453
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.834019660949707,
+                        "y": 2.674083709716797,
+                        "z": 0.28298914432525635
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 2.1809734107591794e-07,
+                        "z": 2.24361883738311e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.8340216875076294,
+                        "y": 2.674083709716797,
+                        "z": 0.28298914432525635
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -2.492540431831003e-07,
+                        "z": 4.4872390958516917e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.60770320892334e-07,
+                        "y": -5.353609085083008,
+                        "z": -0.5781659483909607
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": -1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.501772880554199e-07,
+                        "y": -1.8507822751998901,
+                        "z": -2.0555152893066406
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -5.289912223815918e-07,
+                        "y": 0.5244765281677246,
+                        "z": 1.924193024635315
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Ships_BeardHull.002": {
             "collection": "Ships",
@@ -14117,7 +16195,80 @@ export function getShipParts() {
                 "height": 0.9266287088394165,
                 "depth": 2.153050184249878
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.24217721819877625,
+                        "z": 0.8422272801399231
+                    },
+                    "normal": {
+                        "x": -0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 3.725290298461914e-09,
+                        "y": 0.8553544282913208,
+                        "z": 0.5704496502876282
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.9999998807907104,
+                        "z": -0.000460114300949499
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.7226247191429138,
+                        "y": 0.8553541302680969,
+                        "z": 0.5704496502876282
+                    },
+                    "normal": {
+                        "x": 9.192656875711691e-07,
+                        "y": 0.9999998807907104,
+                        "z": -0.0004591990727931261
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.7226247191429138,
+                        "y": 0.8553541302680969,
+                        "z": 0.5704496502876282
+                    },
+                    "normal": {
+                        "x": -9.192656875711691e-07,
+                        "y": 0.9999998807907104,
+                        "z": -0.0004591990727931261
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -1.2976508140563965,
+                        "z": 0.5705496072769165
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9999999403953552,
+                        "z": -0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.9802322387695312e-08,
+                        "y": -0.07476019859313965,
+                        "z": 0.1028861552476883
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardPoint.dev.Clunk": {
             "collection": "Weapons",
@@ -14137,7 +16288,68 @@ export function getShipParts() {
                 "height": 0.8360453844070435,
                 "depth": 1.7603719234466553
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.5988312363624573,
+                        "y": 0.061942026019096375,
+                        "z": 0.49581679701805115
+                    },
+                    "normal": {
+                        "x": 0.9998744130134583,
+                        "y": -0.013792338781058788,
+                        "z": 0.007812095806002617
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.5988312363624573,
+                        "y": 0.061942026019096375,
+                        "z": 0.49581679701805115
+                    },
+                    "normal": {
+                        "x": -0.9998744130134583,
+                        "y": -0.013792338781058788,
+                        "z": 0.007812095806002617
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.20409232378005981,
+                        "z": 0.7504981160163879
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.18323282897472382,
+                        "z": 0.9830695390701294
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.862645149230957e-09,
+                        "y": -0.7146055698394775,
+                        "z": 0.5335360765457153
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.9998526573181152,
+                        "z": 0.017165152356028557
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 3.5762786865234375e-07,
+                        "z": 0.03743015229701996
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.9999999403953552
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.gun.bracket": {
             "collection": "Weapons",
@@ -14147,7 +16359,44 @@ export function getShipParts() {
                 "height": 0.40691107511520386,
                 "depth": 1.500324010848999
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.0803341865539551e-07,
+                        "y": -0.052351538091897964,
+                        "z": -0.1618661880493164
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.568167686462402e-08,
+                        "y": -0.04926152527332306,
+                        "z": 0.09781220555305481
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.30385160446167e-08,
+                        "y": -0.31570112705230713,
+                        "z": -0.05876842513680458
+                    },
+                    "normal": {
+                        "x": -1.478508579566551e-06,
+                        "y": -0.9999999403953552,
+                        "z": -5.914038752052875e-07
+                    }
+                }
+            ]
         },
         "Weapons_Cube.002": {
             "collection": "Weapons",
@@ -14157,7 +16406,68 @@ export function getShipParts() {
                 "height": 0.4170219898223877,
                 "depth": 1.6852811574935913
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.210719347000122e-08,
+                        "y": -0.048457637429237366,
+                        "z": 0.1995740681886673
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 7.729977369308472e-08,
+                        "y": 0.2083413302898407,
+                        "z": -0.1798921376466751
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.7508864402770996e-07,
+                        "y": -0.5730572938919067,
+                        "z": 0.06973535567522049
+                    },
+                    "normal": {
+                        "x": -4.209840085422911e-07,
+                        "y": -1.0,
+                        "z": -9.877659294943442e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.12533438205718994,
+                        "y": -0.34846705198287964,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.12533438205718994,
+                        "y": -0.34846705198287964,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoitn.gun.dual": {
             "collection": "Weapons",
@@ -14167,7 +16477,56 @@ export function getShipParts() {
                 "height": 0.3860030174255371,
                 "depth": 1.9096742868423462
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -7.450580596923828e-09,
+                        "y": 0.162871852517128,
+                        "z": 0.1718548983335495
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -5.587935447692871e-09,
+                        "y": -0.17201115190982819,
+                        "z": 0.05105866491794586
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -1.0,
+                        "z": 3.1538800726593763e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.13834476470947266,
+                        "y": 0.07880577445030212,
+                        "z": 0.005991220474243164
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.13997423648834229,
+                        "y": 0.07880574464797974,
+                        "z": 0.0059912800788879395
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.gun.barb": {
             "collection": "Weapons",
@@ -14177,7 +16536,68 @@ export function getShipParts() {
                 "height": 0.5145243406295776,
                 "depth": 1.4530174732208252
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 4.284083843231201e-08,
+                        "y": -0.11192557215690613,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -4.956270913680783e-07,
+                        "y": -1.0,
+                        "z": -1.3313473345988314e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.774199962615967e-08,
+                        "y": 0.08824864774942398,
+                        "z": -0.1932326704263687
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 5.21540641784668e-08,
+                        "y": 0.17794546484947205,
+                        "z": 0.26209962368011475
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.12537798285484314,
+                        "y": 0.24456584453582764,
+                        "z": 0.033997077494859695
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.12537822127342224,
+                        "y": 0.2445659041404724,
+                        "z": 0.0339970737695694
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.gun.fork": {
             "collection": "Weapons",
@@ -14187,7 +16607,68 @@ export function getShipParts() {
                 "height": 0.5777534246444702,
                 "depth": 1.7610139846801758
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -3.725290298461914e-08,
+                        "y": 0.05882638692855835,
+                        "z": 0.29144614934921265
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -5.21540641784668e-08,
+                        "y": 0.23784488439559937,
+                        "z": -0.25439226627349854
+                    },
+                    "normal": {
+                        "x": 3.553667505661745e-13,
+                        "y": 3.236933991956903e-07,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -5.960464477539063e-08,
+                        "y": -0.05224907398223877,
+                        "z": -0.13714289665222168
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.24529531598091125,
+                        "z": -0.9694483876228333
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.12652087211608887,
+                        "y": 0.08943289518356323,
+                        "z": 0.06368443369865417
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": -0.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.12652075290679932,
+                        "y": 0.08943295478820801,
+                        "z": 0.06368441879749298
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -0.0,
+                        "z": 0.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.dev.flush": {
             "collection": "Weapons",
@@ -14197,7 +16678,68 @@ export function getShipParts() {
                 "height": 0.7551456689834595,
                 "depth": 1.9211723804473877
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -5.587935447692871e-07,
+                        "y": -1.0217020511627197,
+                        "z": 0.07648426294326782
+                    },
+                    "normal": {
+                        "x": -7.974035298730087e-08,
+                        "y": -1.0,
+                        "z": -2.4274461338791298e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -7.37607479095459e-07,
+                        "y": -0.8099969029426575,
+                        "z": 0.20337927341461182
+                    },
+                    "normal": {
+                        "x": -3.5053023594855404e-08,
+                        "y": -0.14421804249286652,
+                        "z": 0.9895458817481995
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.6851338744163513,
+                        "y": -0.003014449030160904,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -5.012407768845151e-07,
+                        "z": -5.438851644612441e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.6851338744163513,
+                        "y": -0.0030143074691295624,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 5.012404926674208e-07,
+                        "z": -5.438849370875687e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -0.061861634254455566,
+                        "z": -0.4331660270690918
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.dev.lowPro": {
             "collection": "Weapons",
@@ -14207,7 +16749,56 @@ export function getShipParts() {
                 "height": 0.740803599357605,
                 "depth": 1.9596586227416992
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.7565685510635376,
+                        "y": -0.3378719091415405,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 3.5380108442950586e-07,
+                        "z": -9.061313335223531e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.756568193435669,
+                        "y": -0.33787208795547485,
+                        "z": 0.0
+                    },
+                    "normal": {
+                        "x": 1.0,
+                        "y": -3.53800828634121e-07,
+                        "z": 1.132663783209864e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.000995934009552002,
+                        "y": -1.0370973348617554,
+                        "z": -1.341104507446289e-07
+                    },
+                    "normal": {
+                        "x": -1.3273559318349726e-07,
+                        "y": -1.0,
+                        "z": -1.2130782351960079e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.9802322387695312e-08,
+                        "y": -1.4901161193847656e-07,
+                        "z": -0.36553025245666504
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.dev.cruise": {
             "collection": "Weapons",
@@ -14217,7 +16808,20 @@ export function getShipParts() {
                 "height": 1.0790879726409912,
                 "depth": 1.7505097389221191
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.2154555320739746,
+                        "z": -0.3296804428100586
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.dev.hammer": {
             "collection": "Weapons",
@@ -14227,7 +16831,20 @@ export function getShipParts() {
                 "height": 0.9892548322677612,
                 "depth": 1.6245248317718506
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.5118459463119507,
+                        "z": -0.38484323024749756
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.dev.dish": {
             "collection": "Weapons",
@@ -14237,7 +16854,20 @@ export function getShipParts() {
                 "height": 3.425825595855713,
                 "depth": 2.0067784786224365
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 8.940696716308594e-08,
+                        "y": -1.0103754997253418,
+                        "z": -1.1793150901794434
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.base.nose": {
             "collection": "Weapons",
@@ -14247,7 +16877,56 @@ export function getShipParts() {
                 "height": 0.8780555129051208,
                 "depth": 2.8176164627075195
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -2.384185791015625e-07,
+                        "z": 0.4865807890892029
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 3.725290298461914e-08,
+                        "y": 6.407499313354492e-07,
+                        "z": -0.39147472381591797
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 8.940696716308594e-08,
+                        "y": 1.4088075160980225,
+                        "z": -0.21924276649951935
+                    },
+                    "normal": {
+                        "x": 1.425509594810137e-06,
+                        "y": 1.0,
+                        "z": 2.1483640466612997e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.9802322387695312e-08,
+                        "y": -1.408807635307312,
+                        "z": -0.21924276649951935
+                    },
+                    "normal": {
+                        "x": -2.138264562745462e-06,
+                        "y": -1.0,
+                        "z": -8.05637284884142e-07
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.base.tower": {
             "collection": "Weapons",
@@ -14257,7 +16936,32 @@ export function getShipParts() {
                 "height": 1.2775886058807373,
                 "depth": 1.4047991037368774
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.00014994293451309204,
+                        "y": 1.4901161193847656e-08,
+                        "z": -0.6649297475814819
+                    },
+                    "normal": {
+                        "x": 4.00077406084165e-05,
+                        "y": -6.252379690374621e-12,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -5.960464477539063e-08,
+                        "z": 0.6126307845115662
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.base.clip": {
             "collection": "Weapons",
@@ -14267,7 +16971,56 @@ export function getShipParts() {
                 "height": 0.5752457976341248,
                 "depth": 2.0635416507720947
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 5.21540641784668e-08,
+                        "y": -0.3221226930618286,
+                        "z": -0.07015451043844223
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.9371509552001953e-07,
+                        "y": 0.38664934039115906,
+                        "z": 0.06615334749221802
+                    },
+                    "normal": {
+                        "x": 3.28441359442877e-07,
+                        "y": 0.9999999403953552,
+                        "z": 1.0385389259681688e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": -2.384185791015625e-07,
+                        "y": -0.5144029855728149,
+                        "z": 0.5050912499427795
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": -0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -3.594905138015747e-07,
+                        "y": -1.6143609285354614,
+                        "z": 0.3986043632030487
+                    },
+                    "normal": {
+                        "x": -2.9364727538450097e-07,
+                        "y": -1.0,
+                        "z": -4.450211008588667e-07
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.base.cap": {
             "collection": "Weapons",
@@ -14277,7 +17030,56 @@ export function getShipParts() {
                 "height": 0.682742714881897,
                 "depth": 1.9591069221496582
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -1.1175870895385742e-08,
+                        "y": 2.9802322387695312e-08,
+                        "z": -0.24882353842258453
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": -1.2293457984924316e-07,
+                        "y": -1.0346283912658691,
+                        "z": -0.16151300072669983
+                    },
+                    "normal": {
+                        "x": -3.822360952199233e-07,
+                        "y": -0.9999999403953552,
+                        "z": -6.82673658047861e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": 2.980232238769531e-07,
+                        "y": 0.9244781136512756,
+                        "z": -0.041616667062044144
+                    },
+                    "normal": {
+                        "x": 1.5296060951186519e-07,
+                        "y": 1.0,
+                        "z": 1.48187075410533e-06
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.4339190423488617
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_BigGun": {
             "collection": "Weapons",
@@ -14287,7 +17089,56 @@ export function getShipParts() {
                 "height": 2.622154951095581,
                 "depth": 5.350696563720703
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-07,
+                        "y": -2.5000381469726562,
+                        "z": -0.44864726066589355
+                    },
+                    "normal": {
+                        "x": -1.067568901796977e-14,
+                        "y": 5.977199180051684e-08,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.9371509552001953e-07,
+                        "y": -2.749338150024414,
+                        "z": -0.2118847370147705
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.9371509552001953e-07,
+                        "y": 1.9871466159820557,
+                        "z": -0.2118847370147705
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 1.0,
+                        "z": 0.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-07,
+                        "y": 1.7378463745117188,
+                        "z": -0.44864726066589355
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 5.977197048423477e-08,
+                        "z": -0.9999999403953552
+                    }
+                }
+            ]
         },
         "Weapons_Anti-Air-station": {
             "collection": "Weapons",
@@ -14297,7 +17148,20 @@ export function getShipParts() {
                 "height": 0.6094539165496826,
                 "depth": 2.085120916366577
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.24349918961524963
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_MedGun": {
             "collection": "Weapons",
@@ -14307,7 +17171,20 @@ export function getShipParts() {
                 "height": 0.7887215614318848,
                 "depth": 2.095242977142334
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.00431486964225769,
+                        "y": -0.005461931228637695,
+                        "z": -0.38841184973716736
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_SmallGun.001": {
             "collection": "Weapons",
@@ -14317,7 +17194,20 @@ export function getShipParts() {
                 "height": 0.48674607276916504,
                 "depth": 0.41878536343574524
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.12488231062889099,
+                        "y": 0.0,
+                        "z": -0.22881418466567993
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_hardpoint.base.3x": {
             "collection": "Weapons",
@@ -14327,7 +17217,32 @@ export function getShipParts() {
                 "height": 0.6737138032913208,
                 "depth": 2.2156870365142822
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -1.4901161193847656e-07,
+                        "z": 0.04223291203379631
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                },
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": 0.11747550964355469,
+                        "z": -0.5625295639038086
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_Squirtgun": {
             "collection": "Weapons",
@@ -14337,7 +17252,20 @@ export function getShipParts() {
                 "height": 0.7315396666526794,
                 "depth": 0.97164386510849
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 0.0,
+                        "y": -2.9802322387695312e-08,
+                        "z": 0.009255610406398773
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 1.0
+                    }
+                }
+            ]
         },
         "Weapons_SideGunPlatform": {
             "collection": "Weapons",
@@ -14347,7 +17275,32 @@ export function getShipParts() {
                 "height": 0.5521261096000671,
                 "depth": 1.1964175701141357
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": -0.07772382348775864,
+                        "y": 7.82310962677002e-08,
+                        "z": 0.16618385910987854
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 9.028383374243276e-08,
+                        "z": -4.7282065906983917e-07
+                    }
+                },
+                {
+                    "position": {
+                        "x": -0.07772383093833923,
+                        "y": 8.195638656616211e-08,
+                        "z": -0.16618385910987854
+                    },
+                    "normal": {
+                        "x": -1.0,
+                        "y": 9.028383374243276e-08,
+                        "z": 4.7282065906983917e-07
+                    }
+                }
+            ]
         },
         "Weapons_TurretSet": {
             "collection": "Weapons",
@@ -14357,7 +17310,27 @@ export function getShipParts() {
                 "height": 1.1096768379211426,
                 "depth": 2.1106648445129395
             },
-            "face_information": []
+            "face_information": [
+                {
+                    "position": {
+                        "x": 1.4901161193847656e-08,
+                        "y": -0.1002424955368042,
+                        "z": -0.5883375406265259
+                    },
+                    "normal": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": -0.9999999403953552
+                    }
+                }
+            ]
         }
     }
+    let result: any = {};
+    Object.entries(temp).map(([key, value]) => {
+        if (value?.face_information?.length) {
+            result[key] = value;
+        }
+    });
+    return result;
 }
